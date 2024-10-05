@@ -9,8 +9,7 @@ load_dotenv()
 
 def fetch_acled_data():
     api_key = os.getenv('ACLED_API_KEY')
-    email = 'your_email@example.com'  # Replace with the email associated with your API key
-
+    email = os.getenv('ACLED-EMAIL') 
     if not api_key:
         raise ValueError("API key not found. Please set the ACLED_API_KEY in the .env file.")
 
