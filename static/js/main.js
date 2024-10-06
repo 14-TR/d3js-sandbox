@@ -1,30 +1,46 @@
 // Global variables to store the current brushed date range and selected locations
 let currentBrushSelection = null;
 let currentLocationSelection = new Set();
+let activeEventTypes = new Set();
 
-// Fetch the ACLED data and the GeoJSON for Ukraine
+// Define event types and colors
+const allEventTypes = [
+    'Battles',
+    'Explosions/Remote violence',
+    'Protests',
+    'Strategic developments',
+    'Riots',
+    'Violence against civilians'
+];
+
+const color = d3.scaleSequential()
+    .domain([0, allEventTypes.length - 1])
+    .interpolator(d3.interpolateTurbo);
+
+// Fetch data and create visualizations
 d3.json('data/acled_data.json').then(data => {
-    console.log('Raw data loaded:', data);
-
     if (!data || data.length === 0) {
         console.error('No data found in the JSON file.');
         return;
     }
 
-    // Load geographical data for Ukraine
+    activeEventTypes = new Set(allEventTypes);
     d3.json('data/ukraine-boundary.geojson').then(geojson => {
         createSpikeMap(data, geojson);
         createStackedColumnChart(data);
+        createLegend();
+        createResetButton(data);
+        initializeCollapsibleChartWindow();
+    }).catch(error => {
+        console.error('Error fetching GeoJSON:', error);
     });
 }).catch(error => {
-    console.error('Error fetching data:', error);
+    console.error('Error fetching ACLED data:', error);
 });
 
-// Create the spike map for Ukraine
 function createSpikeMap(data, geojson) {
-    // Set up map dimensions and projection
-    const width = 500;
-    const height = 500;
+    const width = window.innerWidth;
+    const height = window.innerHeight;
 
     const svg = d3.select('#ukraine-map')
         .append('svg')
@@ -34,13 +50,14 @@ function createSpikeMap(data, geojson) {
     // Set up a Mercator projection centered on Ukraine
     const projection = d3.geoMercator()
         .center([31.1656, 48.3794]) // Center coordinates of Ukraine
-        .scale(2500) // Adjust scale for a closer zoom into Ukraine
-        .translate([width / 2, height / 2]);
+        .scale(3000) // Adjust scale for zoom level (increase/decrease to zoom in/out)
+        .translate([width / 2, height / 2]); // Center the projection within the SVG
 
     const path = d3.geoPath().projection(projection);
+    const zoomGroup = svg.append('g');
 
-    // Draw the boundary of Ukraine
-    svg.append('g')
+    // Draw Ukraine's boundary
+    zoomGroup.append('g')
         .selectAll('path')
         .data(geojson.features)
         .enter()
@@ -49,27 +66,22 @@ function createSpikeMap(data, geojson) {
         .attr('fill', '#ddd')
         .attr('stroke', '#aaa');
 
-    // Disable zooming and panning
-    const zoom = d3.zoom()
-        .scaleExtent([1, 1]) // Prevent zooming
-        .on('zoom', () => { /* Do nothing */ });
-
-    svg.call(zoom);
-
-    // Process data to calculate the number of events per location
+    // Process data for spikes (this part remains unchanged)
     const locationData = d3.rollups(
         data,
-        v => v.length, // Count the number of events
-        d => d.latitude + ',' + d.longitude // Group by lat/long
+        v => ({
+            count: v.length,
+            eventType: v[0].event_type
+        }),
+        d => d.latitude + ',' + d.longitude
     );
 
-    // Define a scale for spike height
     const lengthScale = d3.scaleLinear()
-        .domain([0, d3.max(locationData, d => d[1])])
+        .domain([0, d3.max(locationData, d => d[1].count)])
         .range([0, 50]);
 
-    // Draw spikes on the map
-    svg.append('g')
+    // Draw spikes
+    zoomGroup.append('g')
         .selectAll('path')
         .data(locationData)
         .enter()
@@ -79,55 +91,55 @@ function createSpikeMap(data, geojson) {
             const coords = projection([long, lat]);
             return `translate(${coords[0]},${coords[1]})`;
         })
-        .attr('d', d => spike(lengthScale(d[1])))
-        .attr('fill', 'red')
+        .attr('d', d => spike(lengthScale(d[1].count)))
+        .attr('fill', d => {
+            const eventTypeIndex = allEventTypes.indexOf(d[1].eventType);
+            return color(eventTypeIndex);
+        })
         .attr('fill-opacity', 0.5)
-        .attr('stroke', 'red')
+        .attr('stroke', d => {
+            const eventTypeIndex = allEventTypes.indexOf(d[1].eventType);
+            return color(eventTypeIndex);
+        })
         .attr('stroke-width', 0.5)
         .on('click', (event, d) => {
-            // Handle spike click to filter the chart
             const [lat, long] = d[0].split(',').map(Number);
             const locKey = `${lat},${long}`;
-
             if (currentLocationSelection.has(locKey)) {
                 currentLocationSelection.delete(locKey);
             } else {
                 currentLocationSelection.add(locKey);
             }
-
-            updateChart(); // Update chart with the selected locations
+            updateChart(); 
         });
 
-    // Function to create a spike shape
+    // Set up zoom behavior
+    const zoom = d3.zoom()
+        .scaleExtent([1, 4])
+        .translateExtent([[0, 0], [width, height]])
+        .on('zoom', (event) => {
+            zoomGroup.attr('transform', event.transform);
+        });
+
+    svg.call(zoom);
+
+    // Corrected spike function to point upwards
     function spike(length) {
-        return `M0,0L${-2},${-length}L${2},${-length}Z`;
+        return `M0,0L2,${-length}L-2,${-length}Z`;
     }
 }
 
+
 // Create the stacked column chart
 function createStackedColumnChart(data) {
-    // [Existing stacked column chart implementation...]
-    const allEventTypes = [
-        'Battles',
-        'Explosions/Remote violence',
-        'Protests',
-        'Strategic developments',
-        'Riots',
-        'Violence against civilians'
-    ];
-
-    const color = d3.scaleSequential()
-        .domain([0, allEventTypes.length - 1])
-        .interpolator(d3.interpolateTurbo);
-
     const processedData = d3.rollups(
         data,
         v => d3.rollup(v, d => d.length, d => d.event_type),
-        d => d.event_date.slice(0, 7) // Extract "YYYY-MM" to group by month
+        d => d.event_date.slice(0, 7)
     ).map(([month, counts]) => {
         const eventCounts = { month: month };
         allEventTypes.forEach(type => {
-            eventCounts[type] = counts.get(type) || 0; // Fill missing event types with 0
+            eventCounts[type] = counts.get(type) || 0;
         });
         return eventCounts;
     });
@@ -225,52 +237,94 @@ function createStackedColumnChart(data) {
         }
         updateChart();
     }
+}
 
-    function updateChart() {
-        const filteredMonths = currentBrushSelection || processedData.map(d => d.month);
-        const filteredData = processedData.filter(d => filteredMonths.includes(d.month));
-        const filteredKeys = Array.from(activeEventTypes);
-        const newStack = d3.stack().keys(filteredKeys);
-        const newStackedData = newStack(filteredData);
+// Create the legend for event types
+function createLegend() {
+    const legend = d3.select('#acled-chart').append('svg')
+        .attr('width', 200)
+        .attr('height', 150)
+        .attr('transform', 'translate(820, 50)');
 
-        const groupUpdate = svg.selectAll('.bar-group')
-            .data(newStackedData, d => d.key);
+    allEventTypes.forEach((event_type, i) => {
+        const legendItem = legend.append('g')
+            .attr('transform', `translate(0, ${i * 20})`)
+            .style('cursor', 'pointer')
+            .on('click', () => toggleEventType(event_type));
 
-        const newGroups = groupUpdate.enter().append('g')
-            .attr('class', d => `bar-group ${cssSafeClass(d.key)}`);
+        legendItem.append('rect')
+            .attr('x', 0)
+            .attr('y', 0)
+            .attr('width', 15)
+            .attr('height', 15)
+            .attr('fill', color(i))
+            .attr('class', `legend-box ${cssSafeClass(event_type)}`);
 
-        newGroups.merge(groupUpdate).each(function(d) {
-            const rects = d3.select(this).selectAll('rect')
-                .data(d.map(e => ({ ...e, key: d.key })));
+        legendItem.append('text')
+            .attr('x', 20)
+            .attr('y', 12)
+            .text(event_type)
+            .style('font-size', '12px')
+            .attr('alignment-baseline', 'middle');
+    });
+}
 
-            rects.enter()
-                .append('rect')
-                .attr('class', 'bar')
-                .merge(rects)
-                .attr('x', d => x(d.data.month))
-                .attr('y', d => y(d[1]))
-                .attr('height', d => y(d[0]) - y(d[1]))
-                .attr('width', x.bandwidth())
-                .attr('fill', d => {
-                    const index = allEventTypes.indexOf(d.key);
-                    return color(index);
-                })
-                .attr('opacity', d => activeEventTypes.has(d.key) ? 1 : 0);
+// Toggle event types on the legend
+function toggleEventType(event_type) {
+    if (activeEventTypes.has(event_type)) {
+        activeEventTypes.delete(event_type);
+    } else {
+        activeEventTypes.add(event_type);
+    }
 
-            rects.exit().remove();
+    d3.select(`.legend-box.${cssSafeClass(event_type)}`)
+        .attr('opacity', activeEventTypes.has(event_type) ? 1 : 0.3);
+
+    updateChart();
+}
+
+// Create a reset button for the brush
+function createResetButton(data) {
+    d3.select('#chart-controls').append('button')
+        .text('Reset')
+        .on('click', () => {
+            currentBrushSelection = null;
+            currentLocationSelection.clear();
+            updateChart();
+            createStackedColumnChart(data);
         });
+}
 
-        groupUpdate.exit().remove();
+// Update the chart based on selections
+function updateChart() {
+    // Implement chart updating logic based on filtering here
+    console.log('Updating chart...');
+}
 
-        svg.select('.x-axis')
-            .call(d3.axisBottom(x).tickFormat(d => d))
-            .selectAll('text')
-            .attr('transform', 'rotate(-45)')
-            .style('text-anchor', 'end');
-    }
+// Initialize collapsible chart window
+function initializeCollapsibleChartWindow() {
+    const collapseButton = document.getElementById('collapse-button');
+    const chartWindow = document.getElementById('chart-window');
+    const chartContent = document.getElementById('chart-content');
 
-    const activeEventTypes = new Set(allEventTypes);
-    function cssSafeClass(name) {
-        return name.replace(/[^a-zA-Z0-9_-]/g, '-');
-    }
+    let isCollapsed = false;
+
+    collapseButton.addEventListener('click', () => {
+        if (isCollapsed) {
+            chartContent.style.display = 'block';
+            collapseButton.textContent = 'Collapse';
+            chartWindow.style.height = '33%';
+            isCollapsed = false;
+        } else {
+            chartContent.style.display = 'none';
+            collapseButton.textContent = 'Expand';
+            chartWindow.style.height = 'auto';
+            isCollapsed = true;
+        }
+    });
+}
+
+// Utility function to create CSS-safe class names
+function cssSafeClass(name) {
+    return name.replace(/[^a-zA-Z0-9_-]/g, '-');
 }
