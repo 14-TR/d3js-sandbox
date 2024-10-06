@@ -53,15 +53,14 @@ text.y-axis-label {
     fill: #333;
 }
 
-/* Bar styles */
-rect {
-    fill: steelblue;
+/* General bar styles */
+rect.bar {
     transition: fill 0.3s;
 }
 
 /* Bar hover effect */
-rect:hover {
-    fill: #4682b4;
+rect.bar:hover {
+    fill: #73ff0082;
 }
 
 /* Tooltip styles (if you decide to add tooltips later) */
